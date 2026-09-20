@@ -1,46 +1,40 @@
 # ExchangeRelay
 
-ExchangeRelay übersetzt **SMTP**- und **IMAP**-Anfragen in Aufrufe der **Microsoft Graph API**.
-Mail-Clients und Geräte senden ihre Mails über SMTP, die der Relay via Graph (`sendMail`) versendet;
-einkommende E-Mails liest der Relay über Graph aus und stellt sie per IMAP zur Verfügung.
+ExchangeRelay translates **SMTP** and **IMAP** requests into calls to the **Microsoft Graph API**.
+Mail clients and devices send their e-mails over SMTP, and the relay dispatches them through
+Graph (`sendMail`); incoming e-mails are read through Graph and exposed via IMAP.
 
 ## Features
 
-- SMTP-Server (`EHLO`/`HELO`, `STARTTLS`, `AUTH PLAIN`, `MAIL FROM`, `RCPT TO`, `DATA`, `QUIT`)
-- IMAP-Server (`CAPABILITY`, `LOGIN`, `NAMESPACE`, `LIST`, `SELECT`, `EXAMINE`,
+- SMTP server (`EHLO`/`HELO`, `STARTTLS`, `AUTH PLAIN`, `MAIL FROM`, `RCPT TO`, `DATA`, `QUIT`)
+- IMAP server (`CAPABILITY`, `LOGIN`, `NAMESPACE`, `LIST`, `SELECT`, `EXAMINE`,
   `STATUS`, `UID SEARCH`, `FETCH`, `STORE`, `IDLE`, `QUIT`)
-- Authentifizierung und Mailversand laufen über Microsoft Graph (OAuth2 Client Credentials)
-- Host- und Absender-Zulassung per `config.ini`:
+- Authentication and mail delivery run through Microsoft Graph (OAuth2 client credentials)
+- Permitted hosts and senders are configured per host in `config.ini`:
 
   ```ini
   [host:*]
-  emails = *          # alle Hosts dürfen mit allen Adressen senden
+  emails = *          # all hosts may send from any address
 
   [host:10.0.0.43]
   emails = mail@host.tld
   ```
 
-- Ports konfigurierbar (`smtp_addr`, `imap_addr`)
+- Configurable ports (`smtp_addr`, `imap_addr`)
 
 ## Installation
 
-Das Skript klont das Repository nach `/opt/exchangerelay`, installiert Go (falls nötig),
-baut das Binary, fragt am Ende nach TenantId, ClientId und ClientSecret, erstellt
-`/etc/exchangerelay/config.ini` und startet den systemd-Service.
+The installer clones the repository to `/opt/exchangerelay`, installs Go (if missing),
+builds the binary, asks at the end for the TenantId, ClientId and ClientSecret, writes
+`/etc/exchangerelay/config.ini` and starts a systemd service.
 
-Am einfachsten per curl:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/bbenouarets/exchangerelay/refs/heads/main/install.sh | bash
-```
-
-Da die Gebäudeanweisungen von root ausgeführt werden müssen:
+Easiest way via curl:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/bbenouarets/exchangerelay/refs/heads/main/install.sh | sudo bash
 ```
 
-Alternativ herunterladen, prüfen und ausführen:
+Or download first, review, and run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/bbenouarets/exchangerelay/refs/heads/main/install.sh -o install.sh
@@ -48,24 +42,28 @@ chmod +x install.sh
 sudo ./install.sh
 ```
 
-Nicht-interaktiv (z. B. für Automatisierung):
+Non-interactive (e.g. for automation):
 
 ```bash
 export EXCHANGERELAY_TENANT_ID="..."
 export EXCHANGERELAY_CLIENT_ID="..."
 export EXCHANGERELAY_CLIENT_SECRET="..."
-curl -fsSL https://raw.githubusercontent.com/bbenouarets/exchangerelay/refs/heads/main/install.sh | sudo bash -s -- --yes
+curl -fsSL https://raw.githubusercontent.com/bbenouarets/exchangerelay/refs/heads/main/install.sh -o install.sh
+sudo bash install.sh --yes
 ```
 
-## Konfiguration
+If an existing installation is found, the script asks whether the old files
+(`/opt/exchangerelay`, the binary, and `/etc/exchangerelay`) should be removed first.
 
-`/etc/exchangerelay/config.ini` (erzeugt vom Installer; lokal zur Entwicklung: `config.ini`):
+## Configuration
+
+`/etc/exchangerelay/config.ini` (created by the installer; locally for development: `config.ini`):
 
 ```ini
 [exchange]
 tenant_id = "00000000-0000-0000-0000-000000000000"
 client_id = "00000000-0000-0000-0000-000000000000"
-client_secret = "hier-das-secret"
+client_secret = "your-secret-here"
 
 [server]
 smtp_addr = "0.0.0.0:25"
@@ -75,14 +73,14 @@ imap_addr = "0.0.0.0:143"
 emails = *
 ```
 
-Erforderliche **Application-Permissions** in Microsoft Entra (Admin-Zustimmung nötig):
+Required **application permissions** in Microsoft Entra (admin consent needed):
 
-- `Mail.Read` (Mailboxen lesen)
-- `Mail.ReadWrite` (z. B. `\Seen`-Flag setzen)
-- `Mail.Send` (Versand)
-- `User.Read.All` (Mailbox-Existenzprüfung / Auflistung)
+- `Mail.Read` (read mailboxes)
+- `Mail.ReadWrite` (e.g. set the `\Seen` flag)
+- `Mail.Send` (send mail)
+- `User.Read.All` (mailbox existence check / listing)
 
-## Service verwalten
+## Managing the service
 
 ```bash
 systemctl status exchangerelay
@@ -90,14 +88,14 @@ journalctl -u exchangerelay -f
 systemctl restart exchangerelay
 ```
 
-## Lokale Entwicklung
+## Local development
 
 ```bash
 go build .
-./exchangerelay                 # liest ./config.ini
+./exchangerelay                 # reads ./config.ini
 ```
 
-Für lokale Tests Ports und erlaubte Hosts in `config.ini` anpassen, z. B.:
+Adjust ports and allowed hosts in `config.ini` for local testing, e.g.:
 
 ```ini
 [server]

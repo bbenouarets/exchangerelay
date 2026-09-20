@@ -37,6 +37,42 @@ running_as_root() { [ "$(id -u)" -eq 0 ]; }
 
 running_as_root || fail "run this script as root (sudo ./install.sh)"
 
+# ---------------------------------------------------------------- previous install?
+cleanup_existing() {
+    log "Removing previous installation"
+    # Name the paths explicitly so bad variable values cannot nuke $HOME.
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl stop "$SERVICE_NAME.service" 2>/dev/null || true
+        systemctl disable "$SERVICE_NAME.service" 2>/dev/null || true
+        rm -f "$UNIT_PATH"
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl reset-failed "$SERVICE_NAME.service" 2>/dev/null || true
+    fi
+    [ -d "$INSTALL_DIR" ] && rm -rf "$INSTALL_DIR"
+    [ -e "$BINARY_PATH" ] && rm -f "$BINARY_PATH"
+    [ -d "$CONFIG_DIR" ] && rm -rf "$CONFIG_DIR"
+    log "Old installation removed"
+}
+
+if [ -d "$INSTALL_DIR" ] || [ -e "$BINARY_PATH" ] || [ -e "$CONFIG_PATH" ]; then
+    if [ "$NON_INTERACTIVE" = true ]; then
+        log "Existing installation detected - keeping files (use without --yes to be asked)"
+    elif [ -t 0 ] || [ -e /dev/tty ]; then
+        printf 'Existing installation found:\n'
+        [ -d "$INSTALL_DIR" ] && printf '  - source:  %s\n' "$INSTALL_DIR"
+        [ -e "$BINARY_PATH" ] && printf '  - binary:  %s\n' "$BINARY_PATH"
+        [ -e "$CONFIG_PATH" ] && printf '  - config:  %s\n' "$CONFIG_PATH"
+        printf 'Remove these files and reinstall from scratch? [y/N] '
+        read -r answer </dev/tty
+        case "$answer" in
+            [yY]|yes|Yes) cleanup_existing ;;
+            *)            log "Keeping existing files; they will be updated/reused" ;;
+        esac
+    else
+        log "Existing installation detected and no TTY - keeping files"
+    fi
+fi
+
 # ---------------------------------------------------------------- go install
 go_available() {
     command -v go >/dev/null 2>&1 || return 1
