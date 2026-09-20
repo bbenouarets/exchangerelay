@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/mail"
 	"strings"
@@ -79,14 +80,24 @@ func (s *SMTPSession) AuthMechanisms() []string {
 
 // Auth spawns a SASL server for the given mechanism.
 func (s *SMTPSession) Auth(mech string) (sasl.Server, error) {
+	if mech != sasl.Plain {
+		log.Printf("smtp: auth failed, unsupported mechanism %q", mech)
+		return nil, smtp.ErrAuthUnknownMechanism
+	}
 	return sasl.NewPlainServer(func(connidentity, username, password string) error {
+		if username == "" || password == "" {
+			log.Printf("smtp: auth failed for empty credentials (username=%q)", username)
+			return smtp.ErrAuthFailed
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
 		exists, err := s.backend.graph.MailboxExists(ctx, username)
 		if err != nil {
+			log.Printf("smtp: auth failed, cannot verify mailbox %q: %v", username, err)
 			return smtp.ErrAuthFailed
 		}
-		if !exists || password == "" {
+		if !exists {
+			log.Printf("smtp: auth failed, mailbox %q does not exist in tenant", username)
 			return smtp.ErrAuthFailed
 		}
 		return nil

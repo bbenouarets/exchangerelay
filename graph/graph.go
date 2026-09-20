@@ -219,7 +219,7 @@ func (c *Client) getToken(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if tr.AccessToken == "" {
-		return "", fmt.Errorf("graph: token request failed with status %d", resp.StatusCode)
+		return "", fmt.Errorf("graph: token request failed with status %d (check tenant_id/client_id/client_secret)", resp.StatusCode)
 	}
 
 	c.token = tr.AccessToken
