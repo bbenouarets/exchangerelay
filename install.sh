@@ -135,16 +135,23 @@ TENANT_ID="${EXCHANGERELAY_TENANT_ID:-}"
 CLIENT_ID="${EXCHANGERELAY_CLIENT_ID:-}"
 CLIENT_SECRET="${EXCHANGERELAY_CLIENT_SECRET:-}"
 
-if [ "$NON_INTERACTIVE" = true ] || [ -n "$TENANT_ID" ]; then
+if [ "$NON_INTERACTIVE" = true ]; then
+    log "Non-interactive mode: using credentials from environment variables"
+elif [ -n "$TENANT_ID$CLIENT_ID$CLIENT_SECRET" ]; then
     log "Using credentials from environment variables"
-else
+elif [ -t 0 ] || [ -e /dev/tty ]; then
+    # Read from the terminal, NOT from stdin: this script may have been
+    # piped in via curl, and read from stdin would swallow the rest of it.
     printf 'Microsoft M365 TenantId: '
-    read -r TENANT_ID
+    read -r TENANT_ID </dev/tty
     printf 'Application (client) ClientId: '
-    read -r CLIENT_ID
+    read -r CLIENT_ID </dev/tty
     printf 'ClientSecret: '
-    read -rs CLIENT_SECRET
+    read -rs CLIENT_SECRET </dev/tty
     printf '\n'
+else
+    log "No TTY and no environment variables set — writing empty credentials"
+    log "Edit $CONFIG_PATH afterwards and run 'systemctl restart $SERVICE_NAME'"
 fi
 
 log "Writing config to $CONFIG_PATH"
