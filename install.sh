@@ -173,6 +173,9 @@ WorkingDirectory=${CONFIG_DIR}
 ExecStart=${BINARY_PATH}
 Restart=on-failure
 RestartSec=5s
+# Allow binding privileged ports (25/143) as a non-root user
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=${CONFIG_DIR}
