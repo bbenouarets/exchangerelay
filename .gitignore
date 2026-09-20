@@ -1,0 +1,22 @@
+# Runtime configuration (contains secrets)
+config.ini
+*.ini.local
+
+# Test scripts (kept local, not part of the repository)
+scripts/*_test*.py
+scripts/testlib.py
+scripts/test_*.py
+
+# Go unit tests are local-only as well
+**/*_test.go
+
+# Binaries
+exchangerelay
+/exchangerelay
+*.exe
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc
