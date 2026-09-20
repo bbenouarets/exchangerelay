@@ -29,6 +29,13 @@ GO_MAJOR="$(cut -d. -f1 <<< "$GO_MIN_VERSION")"
 NON_INTERACTIVE=false
 [ "${1:-}" = "--yes" ] && NON_INTERACTIVE=true
 
+# The caller may sit in a directory that a previous cleanup removed, which
+# breaks getcwd()/getwd() for every child process (bash, go). Move to a
+# guaranteed-valid directory before doing anything else.
+if ! CURRENT_DIR="$(pwd 2>/dev/null)" || [ ! -d "$CURRENT_DIR" ]; then
+    cd / || fail "cannot establish a valid working directory"
+fi
+
 # ---------------------------------------------------------------- helpers
 log()  { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
