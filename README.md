@@ -31,13 +31,13 @@ builds the binary, asks at the end for the TenantId, ClientId and ClientSecret, 
 Easiest way via curl:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bbenouarets/exchangerelay/main/install.sh | sudo bash
+curl -fsSL -H "Accept: application/vnd.github.raw" https://api.github.com/repos/bbenouarets/exchangerelay/contents/install.sh?ref=main | sudo bash
 ```
 
 Or download first, review, and run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bbenouarets/exchangerelay/main/install.sh -o install.sh
+curl -fsSL -H "Accept: application/vnd.github.raw" https://api.github.com/repos/bbenouarets/exchangerelay/contents/install.sh?ref=main -o install.sh
 chmod +x install.sh
 sudo ./install.sh
 ```
@@ -48,7 +48,7 @@ Non-interactive (e.g. for automation):
 export EXCHANGERELAY_TENANT_ID="..."
 export EXCHANGERELAY_CLIENT_ID="..."
 export EXCHANGERELAY_CLIENT_SECRET="..."
-curl -fsSL https://raw.githubusercontent.com/bbenouarets/exchangerelay/main/install.sh -o install.sh
+curl -fsSL -H "Accept: application/vnd.github.raw" https://api.github.com/repos/bbenouarets/exchangerelay/contents/install.sh?ref=main -o install.sh
 sudo bash install.sh --yes
 ```
 
