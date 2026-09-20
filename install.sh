@@ -23,7 +23,7 @@ SERVICE_USER="exchangerelay"
 SERVICE_NAME="exchangerelay"
 UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 
-GO_MIN_VERSION="1.22"
+GO_MIN_VERSION="1.21"
 GO_MAJOR="$(cut -d. -f1 <<< "$GO_MIN_VERSION")"
 
 NON_INTERACTIVE=false
@@ -52,6 +52,9 @@ cleanup_existing() {
     [ -e "$BINARY_PATH" ] && rm -f "$BINARY_PATH"
     [ -d "$CONFIG_DIR" ] && rm -rf "$CONFIG_DIR"
     log "Old installation removed"
+    # The working directory may have been inside one of the deleted paths
+    # (e.g. /etc/exchangerelay). cd somewhere valid so getwd() works.
+    cd /
 }
 
 if [ -d "$INSTALL_DIR" ] || [ -e "$BINARY_PATH" ] || [ -e "$CONFIG_PATH" ]; then
@@ -99,15 +102,23 @@ install_go() {
         zypper --non-interactive install go git
     fi
 
-    if ! go_available; then
-        log "Installing Go from go.dev tarball"
-        ARCH="$(uname -m)"; case "$ARCH" in x86_64|amd64) ARCH=amd64 ;; aarch64|arm64) ARCH=arm64 ;; *) ARCH=amd64 ;; esac
-        TARBALL="go${GO_MIN_VERSION}.linux-${ARCH}.tar.gz"
-        curl -fsSL "https://go.dev/dl/${TARBALL}" | tar -C /usr/local -xz
-        export PATH="/usr/local/go/bin:$PATH"
+    log "Installing Go ${GO_MIN_VERSION}+ via the system package manager"
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update -qq
+        apt-get install -y -qq golang-go git
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y golang git
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y golang git
+    elif command -v pacman >/dev/null 2>&1; then
+        pacman -Sy --noconfirm go git
+    elif command -v zypper >/dev/null 2>&1; then
+        zypper --non-interactive install go git
+    else
+        fail "unsupported distribution: install Go ${GO_MIN_VERSION}+ and git manually"
     fi
 
-    go_available || fail "could not install go; install Go ${GO_MIN_VERSION}+ manually"
+    go_available || fail "Go could not be installed via the package manager; install Go ${GO_MIN_VERSION}+ manually"
 }
 
 # ---------------------------------------------------------------- download & build
