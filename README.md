@@ -9,6 +9,9 @@ Graph (`sendMail`); incoming e-mails are read through Graph and exposed via IMAP
 - SMTP server (`EHLO`/`HELO`, `STARTTLS`, `AUTH PLAIN`, `MAIL FROM`, `RCPT TO`, `DATA`, `QUIT`)
 - IMAP server (`CAPABILITY`, `LOGIN`, `NAMESPACE`, `LIST`, `SELECT`, `EXAMINE`,
   `STATUS`, `UID SEARCH`, `FETCH`, `STORE`, `IDLE`, `QUIT`)
+- IMAP exposes **real Exchange folders** (Inbox, Sent Items, Drafts, Deleted Items, ...)
+  via `LIST`/`SELECT` backed by Graph `mailFolders`
+- Optional implicit-TLS listeners (`imap_tls_addr`, `smtp_tls_addr`) for IMAPS (993) and SMTPS (465)
 - Authentication and mail delivery run through Microsoft Graph (OAuth2 client credentials)
 - Permitted hosts and senders are configured per host in `config.ini`:
 
@@ -69,6 +72,10 @@ client_secret = "your-secret-here"
 smtp_addr = "0.0.0.0:25"
 imap_addr = "0.0.0.0:143"
 
+# optional implicit-TLS listeners for clients that expect IMAPS/SMTPS
+imap_tls_addr = "0.0.0.0:993"
+smtp_tls_addr = "0.0.0.0:465"
+
 [host:*]
 emails = *
 ```
@@ -86,6 +93,12 @@ Required **application permissions** in Microsoft Entra (admin consent needed):
 systemctl status exchangerelay
 journalctl -u exchangerelay -f
 systemctl restart exchangerelay
+```
+
+Updating an existing installation (pull + rebuild + restart):
+
+```bash
+sudo bash /opt/exchangerelay/update.sh
 ```
 
 ## Local development

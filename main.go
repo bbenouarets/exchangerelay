@@ -63,7 +63,28 @@ func main() {
 		}
 	}()
 
+	// Optional implicit-TLS (SMTPS/IMAPS) listeners, if configured.
+	if cfg.Server.SmtpTlsAddr != "" {
+		smtpsSrv := gosmtp.NewServer(server.NewSMTPBackend(cfg, client))
+		smtpsSrv.Addr = cfg.Server.SmtpTlsAddr
+		smtpsSrv.Domain = "localhost"
+		smtpsSrv.TLSConfig = tlsConfig
+		smtpsSrv.AllowInsecureAuth = true
+		go func() { _ = smtpsSrv.ListenAndServe() }()
+		fmt.Printf("SMTPS listening on %s\n", cfg.Server.SmtpTlsAddr)
+	}
+	if cfg.Server.ImapTlsAddr != "" {
+		imapsSrv := gonimapsrv.New(server.NewIMAPBackend(cfg, client))
+		imapsSrv.Addr = cfg.Server.ImapTlsAddr
+		imapsSrv.TLSConfig = tlsConfig
+		imapsSrv.AllowInsecureAuth = true
+		imapsSrv.Enable(server.NamespaceExtension{})
+		go func() { _ = imapsSrv.ListenAndServe() }()
+		fmt.Printf("IMAPS listening on %s\n", cfg.Server.ImapTlsAddr)
+	}
+
 	if err := imapSrv.ListenAndServe(); err != nil {
 		log.Fatalf("IMAP server error: %v", err)
 	}
 }
+

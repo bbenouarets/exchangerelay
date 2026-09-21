@@ -472,3 +472,147 @@ func (c *Client) SetRead(ctx context.Context, mailbox, messageID string, read bo
 	}
 	return nil
 }
+
+type Folder struct {
+	ID             string `json:"id"`
+	DisplayName    string `json:"displayName"`
+	TotalItemCount int    `json:"totalItemCount"`
+	UnreadItemCount int   `json:"unreadItemCount"`
+}
+
+type listFoldersResponse struct {
+	Value []struct {
+		ID              string `json:"id"`
+		DisplayName     string `json:"displayName"`
+		TotalItemCount  int    `json:"totalItemCount"`
+		UnreadItemCount int    `json:"unreadItemCount"`
+	} `json:"value"`
+}
+
+// wellKnownFolders maps IMAP canonical names to Graph well-known folder names.
+var WellKnownFolders = map[string]string{
+	"INBOX":         "inbox",
+	"DRAFTS":        "drafts",
+	"SENT":          "sentitems",
+	"SENT ITEMS":    "sentitems",
+	"SITEMS":        "sentitems",
+	"TRASH":         "deleteditems",
+	"DELETED":       "deleteditems",
+	"DELETED ITEMS": "deleteditems",
+	"ARCHIVE":       "archive",
+}
+
+// ListFolders returns the first-level mail folders of a mailbox.
+func (c *Client) ListFolders(ctx context.Context, mailbox string) ([]Folder, error) {
+	token, err := c.getToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	endpoint := fmt.Sprintf("https://graph.microsoft.com/v1.0/users/%s/mailFolders", url.PathEscape(mailbox))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("graph: list folders failed with status %d", resp.StatusCode)
+	}
+
+	var lr listFoldersResponse
+	if err := json.NewDecoder(resp.Body).Decode(&lr); err != nil {
+		return nil, err
+	}
+
+	folders := make([]Folder, 0, len(lr.Value))
+	for _, f := range lr.Value {
+		folders = append(folders, Folder{
+			ID:              f.ID,
+			DisplayName:     f.DisplayName,
+			TotalItemCount:  f.TotalItemCount,
+			UnreadItemCount: f.UnreadItemCount,
+		})
+	}
+	return folders, nil
+}
+
+// ListFolderMessages lists the newest messages of a specific mail folder.
+// folder may be a Graph folder ID or one of the well-known names
+// ("inbox", "drafts", "sentitems", "deleteditems", "archive").
+func (c *Client) ListFolderMessages(ctx context.Context, mailbox, folder string, top int) ([]Mail, error) {
+	if top <= 0 {
+		top = 10
+	}
+
+	token, err := c.getToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	endpoint := fmt.Sprintf("https://graph.microsoft.com/v1.0/users/%s/mailFolders/%s/messages", url.PathEscape(mailbox), url.PathEscape(folder))
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	q := u.Query()
+	q.Set("$top", fmt.Sprintf("%d", top))
+	q.Set("$select", "id,subject,bodyPreview,receivedDateTime,isRead,hasAttachments,from,toRecipients")
+	q.Set("$orderby", "receivedDateTime desc")
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var body struct {
+			Error struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		return nil, fmt.Errorf("graph: list folder messages failed with status %d: %s %s", resp.StatusCode, body.Error.Code, body.Error.Message)
+	}
+
+	var lr listResponse
+	if err := json.NewDecoder(resp.Body).Decode(&lr); err != nil {
+		return nil, err
+	}
+
+	mails := make([]Mail, 0, len(lr.Value))
+	for _, item := range lr.Value {
+		m := Mail{
+			ID:        item.ID,
+			Subject:   item.Subject,
+			BodyPrev:  item.BodyPreview,
+			Received:  parseTime(item.ReceivedTime),
+			IsRead:    item.IsRead,
+			HasAttach: item.HasAtt,
+		}
+		if item.From != nil {
+			m.FromName = item.From.EmailAddress.Name
+			m.FromAddr = item.From.EmailAddress.Address
+		}
+		for _, r := range item.ToRecipients {
+			m.ToAddrs = append(m.ToAddrs, r.EmailAddress.Address)
+		}
+		mails = append(mails, m)
+	}
+	return mails, nil
+}

@@ -18,8 +18,10 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	SmtpAddr string `json:"smtpAddr" ini:"smtp_addr"`
-	ImapAddr string `json:"imapAddr" ini:"imap_addr"`
+	SmtpAddr    string `json:"smtpAddr" ini:"smtp_addr"`
+	ImapAddr    string `json:"imapAddr" ini:"imap_addr"`
+	SmtpTlsAddr string `json:"smtpTlsAddr" ini:"smtp_tls_addr"`
+	ImapTlsAddr string `json:"imapTlsAddr" ini:"imap_tls_addr"`
 }
 
 type Exchange struct {

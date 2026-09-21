@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/emersion/go-imap"
@@ -53,13 +54,56 @@ type IMAPUser struct {
 
 func (u *IMAPUser) Username() string { return u.username }
 
+func (u *IMAPUser) folders() ([]graph.Folder, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer cancel()
+	return u.backend.graph.ListFolders(ctx, u.username)
+}
+
 func (u *IMAPUser) ListMailboxes(subscribed bool) ([]backend.Mailbox, error) {
-	return []backend.Mailbox{u.newMailbox()}, nil
+	folders, err := u.folders()
+	if err != nil {
+		return nil, err
+	}
+
+	var out []backend.Mailbox
+	for _, f := range folders {
+		out = append(out, &IMAPMailbox{user: u, folder: wellKnownFor(f), label: f.DisplayName})
+	}
+	return out, nil
+}
+
+// wellKnownFor returns the Graph well-known folder name when possible,
+// otherwise the actual folder ID is used for subsequent requests.
+func wellKnownFor(f graph.Folder) string {
+	for _, well := range graph.WellKnownFolders {
+		if strings.EqualFold(well, f.DisplayName) {
+			return well
+		}
+	}
+	switch strings.ToLower(f.DisplayName) {
+	case "inbox":
+		return "inbox"
+	}
+	return f.ID
 }
 
 func (u *IMAPUser) GetMailbox(name string) (backend.Mailbox, error) {
 	if name == "INBOX" {
-		return u.newMailbox(), nil
+		return &IMAPMailbox{user: u, folder: "inbox", label: "INBOX"}, nil
+	}
+	if well, ok := graph.WellKnownFolders[strings.ToUpper(name)]; ok {
+		return &IMAPMailbox{user: u, folder: well, label: name}, nil
+	}
+
+	folders, err := u.folders()
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range folders {
+		if strings.EqualFold(f.DisplayName, name) {
+			return &IMAPMailbox{user: u, folder: wellKnownFor(f), label: f.DisplayName}, nil
+		}
 	}
 	return nil, backend.ErrNoSuchMailbox
 }
@@ -84,25 +128,27 @@ func (u *IMAPUser) newMailbox() *IMAPMailbox {
 	return &IMAPMailbox{user: u}
 }
 
-// IMAPMailbox implements backend.Mailbox for the INBOX, backed by Graph.
+// IMAPMailbox implements backend.Mailbox for a single Graph mail folder.
 type IMAPMailbox struct {
-	user *IMAPUser
+	user   *IMAPUser
+	folder string // graph folder id / well-known name ("inbox" for INBOX)
+	label  string // IMAP-facing mailbox name
 }
 
-func (m *IMAPMailbox) Name() string { return "INBOX" }
+func (m *IMAPMailbox) Name() string { return m.label }
 
 func (m *IMAPMailbox) Info() (*imap.MailboxInfo, error) {
 	return &imap.MailboxInfo{
 		Attributes: []string{},
 		Delimiter:  "/",
-		Name:       "INBOX",
+		Name:       m.label,
 	}, nil
 }
 
 func (m *IMAPMailbox) list() ([]graph.Mail, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
-	return m.user.backend.graph.ListMailsFor(ctx, m.user.username, imapMaxMessages)
+	return m.user.backend.graph.ListFolderMessages(ctx, m.user.username, m.folder, imapMaxMessages)
 }
 
 func (m *IMAPMailbox) raw(mailID string) ([]byte, error) {
@@ -117,7 +163,7 @@ func (m *IMAPMailbox) Status(items []imap.StatusItem) (*imap.MailboxStatus, erro
 		return nil, err
 	}
 
-	status := imap.NewMailboxStatus("INBOX", items)
+	status := imap.NewMailboxStatus(m.label, items)
 	status.Flags = []string{}
 	status.PermanentFlags = []string{imap.SeenFlag, "*"}
 	status.UnseenSeqNum = 0

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -30,6 +31,7 @@ type SMTPSession struct {
 	backend *SMTPBackend
 	conn    net.Addr
 	from    string
+	authUser string
 	to      []string
 }
 
@@ -100,6 +102,7 @@ func (s *SMTPSession) Auth(mech string) (sasl.Server, error) {
 			log.Printf("smtp: auth failed, mailbox %q does not exist in tenant", username)
 			return smtp.ErrAuthFailed
 		}
+		s.authUser = username
 		return nil
 	}), nil
 }
@@ -150,9 +153,24 @@ func (s *SMTPSession) Data(r io.Reader) error {
 		return errors.New("cannot parse message")
 	}
 
+	// Graph sendMail dispatches from a real tenant mailbox. Prefer the
+	// mailbox that authenticated; fall back to the envelope sender, which
+	// is only valid if it is a tenant mailbox itself.
+	sender := s.from
+	if s.authUser != "" {
+		sender = s.authUser
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
-	return s.backend.graph.SendMail(ctx, s.from, s.to, nil, subject, body, contentType)
+	err = s.backend.graph.SendMail(ctx, sender, s.to, nil, subject, body, contentType)
+	if err != nil && strings.Contains(err.Error(), "ErrorInvalidUser") {
+		return &smtp.SMTPError{
+			Code:    554,
+			Message: fmt.Sprintf("sender mailbox %q does not exist in tenant; authenticate with a real mailbox (AUTH PLAIN) or send from an existing one", sender),
+		}
+	}
+	return err
 }
 
 func parseMessage(raw []byte) (subject, body, contentType string, err error) {
