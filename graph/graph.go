@@ -616,3 +616,58 @@ func (c *Client) ListFolderMessages(ctx context.Context, mailbox, folder string,
 	}
 	return mails, nil
 }
+
+// CreateMessage stores a message in the given folder (Graph treats it as a draft).
+func (c *Client) CreateMessage(ctx context.Context, mailbox, folder string, to []string, subject, body, contentType, from string) error {
+	token, err := c.getToken(ctx)
+	if err != nil {
+		return err
+	}
+
+	recipients := make([]recipient, 0, len(to))
+	for _, addr := range to {
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			continue
+		}
+		recipients = append(recipients, recipient{EmailAddress: emailAddress{Address: addr}})
+	}
+
+	payload := struct {
+		Subject      string      `json:"subject"`
+		Body         bodyItem    `json:"body"`
+		From         *address    `json:"from,omitempty"`
+		ToRecipients []recipient `json:"toRecipients"`
+	}{
+		Subject:      subject,
+		Body:         bodyItem{ContentType: contentType, Content: body},
+		ToRecipients: recipients,
+	}
+	if from != "" {
+		payload.From = &address{EmailAddress: emailAddress{Address: from}}
+	}
+
+	j, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	endpoint := fmt.Sprintf("https://graph.microsoft.com/v1.0/users/%s/mailFolders/%s/messages", url.PathEscape(mailbox), url.PathEscape(folder))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(j)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("graph: create message failed with status %d", resp.StatusCode)
+	}
+	return nil
+}

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"time"
 
@@ -352,7 +353,19 @@ func emptyEntity() (*gomessage.Entity, error) {
 }
 
 func (m *IMAPMailbox) CreateMessage(flags []string, date time.Time, body imap.Literal) error {
-	return errors.New("APPEND is not supported")
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		return err
+	}
+
+	from, to, subject, textBody, contentType, err := parseMessage(raw)
+	if err != nil {
+		return errors.New("cannot parse appended message")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer cancel()
+	return m.user.backend.graph.CreateMessage(ctx, m.user.username, m.folder, to, subject, textBody, contentType, from)
 }
 
 func (m *IMAPMailbox) UpdateMessagesFlags(uid bool, seqset *imap.SeqSet, operation imap.FlagsOp, flags []string) error {

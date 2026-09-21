@@ -148,7 +148,7 @@ func (s *SMTPSession) Data(r io.Reader) error {
 		return err
 	}
 
-	subject, body, contentType, err := parseMessage(raw)
+	_, _, subject, body, contentType, err := parseMessage(raw)
 	if err != nil {
 		return errors.New("cannot parse message")
 	}
@@ -173,15 +173,21 @@ func (s *SMTPSession) Data(r io.Reader) error {
 	return err
 }
 
-func parseMessage(raw []byte) (subject, body, contentType string, err error) {
+func parseMessage(raw []byte) (from string, to []string, subject, body, contentType string, err error) {
 	contentType = "Text"
 
 	msg, err := gomail.CreateReader(bytes.NewReader(raw))
 	if err != nil {
-		return "", "", "", err
+		return "", nil, "", "", "", err
 	}
 
 	subject, _ = msg.Header.Text("Subject")
+	from, _ = msg.Header.Text("From")
+	if addresses, errs := mail.ParseAddressList(msg.Header.Get("To")); errs == nil {
+		for _, addr := range addresses {
+			to = append(to, addr.Address)
+		}
+	}
 
 	var textBuf, htmlBuf bytes.Buffer
 	for {
@@ -190,16 +196,16 @@ func parseMessage(raw []byte) (subject, body, contentType string, err error) {
 			break
 		}
 		if err != nil {
-			return "", "", "", err
+			return "", nil, "", "", "", err
 		}
 		switch part.Header.Get("Content-Type") {
 		case "text/html":
 			if _, err := io.Copy(&htmlBuf, part.Body); err != nil {
-				return "", "", "", err
+				return "", nil, "", "", "", err
 			}
 		default:
 			if _, err := io.Copy(&textBuf, part.Body); err != nil {
-				return "", "", "", err
+				return "", nil, "", "", "", err
 			}
 		}
 	}
@@ -210,5 +216,5 @@ func parseMessage(raw []byte) (subject, body, contentType string, err error) {
 	} else {
 		body = textBuf.String()
 	}
-	return subject, body, contentType, nil
+	return from, to, subject, body, contentType, nil
 }
