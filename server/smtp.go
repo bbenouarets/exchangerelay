@@ -13,6 +13,7 @@ import (
 	"time"
 
 	gomail "github.com/emersion/go-message/mail"
+	_ "github.com/emersion/go-message/charset"
 	"github.com/emersion/go-sasl"
 	"github.com/emersion/go-smtp"
 
@@ -198,12 +199,15 @@ func parseMessage(raw []byte) (from string, to []string, subject, body, contentT
 		if err != nil {
 			return "", nil, "", "", "", err
 		}
-		switch part.Header.Get("Content-Type") {
-		case "text/html":
+
+		// Only plain text and HTML make it into the Graph body; attachments
+		// and other binary parts would otherwise corrupt the text.
+		switch {
+		case strings.HasPrefix(part.Header.Get("Content-Type"), "text/html"):
 			if _, err := io.Copy(&htmlBuf, part.Body); err != nil {
 				return "", nil, "", "", "", err
 			}
-		default:
+		case strings.HasPrefix(part.Header.Get("Content-Type"), "text/plain"):
 			if _, err := io.Copy(&textBuf, part.Body); err != nil {
 				return "", nil, "", "", "", err
 			}
