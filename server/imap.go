@@ -409,6 +409,55 @@ func (m *IMAPMailbox) CopyMessages(uid bool, seqset *imap.SeqSet, dest string) e
 	return errors.New("COPY is not supported")
 }
 
+// ResolveFolder maps an IMAP mailbox name (as returned by LIST) to the Graph
+// folder id / well-known name.
+func (u *IMAPUser) ResolveFolder(name string) (string, error) {
+	if name == "INBOX" {
+		return "inbox", nil
+	}
+	if well, ok := graph.WellKnownFolders[strings.ToUpper(name)]; ok {
+		return well, nil
+	}
+	folders, err := u.folders()
+	if err != nil {
+		return "", err
+	}
+	for _, f := range folders {
+		if strings.EqualFold(f.DisplayName, name) {
+			return wellKnownFor(f), nil
+		}
+	}
+	return "", backend.ErrNoSuchMailbox
+}
+
+// MoveMessages implements backend.MoveMailbox using Graph message moves.
+func (m *IMAPMailbox) MoveMessages(uid bool, seqset *imap.SeqSet, dest string) error {
+	destFolder, err := m.user.ResolveFolder(dest)
+	if err != nil {
+		return err
+	}
+
+	mails, err := m.list()
+	if err != nil {
+		return err
+	}
+
+	var lastErr error
+	for i, mail := range mails {
+		if !seqset.Contains(uint32(i + 1)) {
+			continue
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		err := m.user.backend.graph.MoveMessage(ctx, m.user.username, mail.ID, destFolder)
+		cancel()
+		if err != nil {
+			lastErr = err
+		}
+	}
+	return lastErr
+}
+
 func (m *IMAPMailbox) Expunge() error {
 	return errors.New("EXPUNGE is not supported")
 }

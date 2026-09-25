@@ -671,3 +671,48 @@ func (c *Client) CreateMessage(ctx context.Context, mailbox, folder string, to [
 	}
 	return nil
 }
+
+// MoveMessage moves a message into another folder.
+// destFolder may be a Graph folder ID or one of the well-known names
+// ("inbox", "drafts", "sentitems", "deleteditems", "archive").
+func (c *Client) MoveMessage(ctx context.Context, mailbox, messageID, destFolder string) error {
+	token, err := c.getToken(ctx)
+	if err != nil {
+		return err
+	}
+
+	payload := struct {
+		DestinationID string `json:"destinationId"`
+	}{DestinationID: destFolder}
+
+	j, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	endpoint := fmt.Sprintf("https://graph.microsoft.com/v1.0/users/%s/messages/%s/move", url.PathEscape(mailbox), url.PathEscape(messageID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(j)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		var body struct {
+			Error struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		return fmt.Errorf("graph: move message failed with status %d: %s %s", resp.StatusCode, body.Error.Code, body.Error.Message)
+	}
+	return nil
+}
