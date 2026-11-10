@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/mail"
 	"strings"
@@ -29,11 +29,12 @@ type SMTPBackend struct {
 }
 
 type SMTPSession struct {
-	backend *SMTPBackend
-	conn    net.Addr
-	from    string
+	backend  *SMTPBackend
+	conn     net.Addr
+	log      *slog.Logger
+	from     string
 	authUser string
-	to      []string
+	to       []string
 }
 
 func NewSMTPBackend(cfg *config.Config, client *graph.Client) *SMTPBackend {
@@ -41,7 +42,11 @@ func NewSMTPBackend(cfg *config.Config, client *graph.Client) *SMTPBackend {
 }
 
 func (b *SMTPBackend) NewSession(c *smtp.Conn) (smtp.Session, error) {
-	return &SMTPSession{backend: b, conn: c.Conn().RemoteAddr()}, nil
+	remote := c.Conn().RemoteAddr()
+	_, tls := c.TLSConnectionState()
+	log := slog.With("remote", remote.String())
+	log.Debug("smtp: session started", "tls", tls)
+	return &SMTPSession{backend: b, conn: remote, log: log}, nil
 }
 
 func (b *SMTPBackend) findSender(ip string) (config.Sender, bool) {
@@ -84,55 +89,62 @@ func (s *SMTPSession) AuthMechanisms() []string {
 // Auth spawns a SASL server for the given mechanism.
 func (s *SMTPSession) Auth(mech string) (sasl.Server, error) {
 	if mech != sasl.Plain {
-		log.Printf("smtp: auth failed, unsupported mechanism %q", mech)
+		s.log.Warn("smtp: auth failed", "reason", "unsupported mechanism", "mechanism", mech)
 		return nil, smtp.ErrAuthUnknownMechanism
 	}
 	return sasl.NewPlainServer(func(connidentity, username, password string) error {
 		if username == "" || password == "" {
-			log.Printf("smtp: auth failed for empty credentials (username=%q)", username)
+			s.log.Warn("smtp: auth failed", "reason", "empty credentials", "user", username)
 			return smtp.ErrAuthFailed
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
 		exists, err := s.backend.graph.MailboxExists(ctx, username)
 		if err != nil {
-			log.Printf("smtp: auth failed, cannot verify mailbox %q: %v", username, err)
+			s.log.Error("smtp: auth failed", "reason", "cannot verify mailbox", "user", username, "err", err)
 			return smtp.ErrAuthFailed
 		}
 		if !exists {
-			log.Printf("smtp: auth failed, mailbox %q does not exist in tenant", username)
+			s.log.Warn("smtp: auth failed", "reason", "mailbox does not exist in tenant", "user", username)
 			return smtp.ErrAuthFailed
 		}
 		s.authUser = username
+		s.log.Info("smtp: auth", "user", username)
 		return nil
 	}), nil
 }
 
 func (s *SMTPSession) Logout() error {
+	s.log.Debug("smtp: session ended")
 	return nil
 }
 
 func (s *SMTPSession) Mail(from string, opts *smtp.MailOptions) error {
 	fromAddr, err := mail.ParseAddress(from)
 	if err != nil {
+		s.log.Warn("smtp: sender rejected", "reason", "invalid from address", "from", from)
 		return errors.New("invalid from address")
 	}
 	if !s.backend.allowedFrom(s.conn, fromAddr.Address) {
+		s.log.Warn("smtp: sender rejected", "reason", "sender not allowed for this IP", "from", fromAddr.Address)
 		return &smtp.SMTPError{
 			Code:    550,
 			Message: "relay access denied: sender not allowed for this IP",
 		}
 	}
 	s.from = fromAddr.Address
+	s.log.Debug("smtp: sender accepted", "from", s.from)
 	return nil
 }
 
 func (s *SMTPSession) Rcpt(to string, opts *smtp.RcptOptions) error {
 	toAddr, err := mail.ParseAddress(to)
 	if err != nil {
+		s.log.Warn("smtp: recipient rejected", "reason", "invalid recipient address", "to", to)
 		return errors.New("invalid recipient address")
 	}
 	s.to = append(s.to, toAddr.Address)
+	s.log.Debug("smtp: recipient accepted", "to", toAddr.Address)
 	return nil
 }
 
@@ -146,11 +158,13 @@ func (s *SMTPSession) Data(r io.Reader) error {
 
 	raw, err := io.ReadAll(r)
 	if err != nil {
+		s.log.Warn("smtp: reading message failed", "from", s.from, "err", err)
 		return err
 	}
 
 	_, _, subject, body, contentType, err := parseMessage(raw)
 	if err != nil {
+		s.log.Warn("smtp: message rejected", "reason", "cannot parse message", "from", s.from, "size", len(raw), "err", err)
 		return errors.New("cannot parse message")
 	}
 
@@ -162,9 +176,17 @@ func (s *SMTPSession) Data(r io.Reader) error {
 		sender = s.authUser
 	}
 
+	log := s.log.With("from", s.from, "mailbox", sender, "to", strings.Join(s.to, ","), "size", len(raw))
+
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
 	err = s.backend.graph.SendMail(ctx, sender, s.to, nil, subject, body, contentType)
+	if err != nil {
+		log.Error("smtp: relaying message failed", "duration", time.Since(start), "err", err)
+	} else {
+		log.Info("smtp: message relayed", "duration", time.Since(start))
+	}
 	if err != nil && strings.Contains(err.Error(), "ErrorInvalidUser") {
 		return &smtp.SMTPError{
 			Code:    554,

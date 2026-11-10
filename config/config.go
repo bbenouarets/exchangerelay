@@ -14,6 +14,7 @@ type ConfigProvider struct {
 type Config struct {
 	Exchange       Exchange     `json:"exchange"`
 	Server         ServerConfig `json:"server"`
+	Log            LogConfig    `json:"log"`
 	AllowedSenders []Sender     `json:"allowedSenders"`
 }
 
@@ -22,6 +23,11 @@ type ServerConfig struct {
 	ImapAddr    string `json:"imapAddr" ini:"imap_addr"`
 	SmtpTlsAddr string `json:"smtpTlsAddr" ini:"smtp_tls_addr"`
 	ImapTlsAddr string `json:"imapTlsAddr" ini:"imap_tls_addr"`
+}
+
+type LogConfig struct {
+	// Level is one of "debug", "info" (default), "warn" or "error".
+	Level string `json:"level" ini:"level"`
 }
 
 type Exchange struct {
@@ -50,6 +56,10 @@ func (c *ConfigProvider) Load() (*Config, error) {
 		return nil, err
 	}
 	if err := cfg.Section("server").MapTo(&config.Server); err != nil {
+		return nil, err
+	}
+
+	if err := cfg.Section("log").MapTo(&config.Log); err != nil {
 		return nil, err
 	}
 

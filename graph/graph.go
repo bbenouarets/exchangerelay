@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -116,8 +117,28 @@ func NewClient(tenantID, clientID, clientSecret, userID string) *Client {
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		UserID:       userID,
-		httpClient:   &http.Client{Timeout: 30 * time.Second},
+		httpClient:   &http.Client{Timeout: 30 * time.Second, Transport: logTransport{}},
 	}
+}
+
+// logTransport logs every request sent to Microsoft (Graph and the token
+// endpoint): at debug level normally, as a warning when the request fails,
+// is throttled or hits a server error. Query strings are not logged.
+type logTransport struct{}
+
+func (logTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	start := time.Now()
+	resp, err := http.DefaultTransport.RoundTrip(req)
+	log := slog.With("method", req.Method, "url", req.URL.Host+req.URL.Path, "duration", time.Since(start))
+	switch {
+	case err != nil:
+		log.Warn("graph: request failed", "err", err)
+	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
+		log.Warn("graph: request", "status", resp.StatusCode)
+	default:
+		log.Debug("graph: request", "status", resp.StatusCode)
+	}
+	return resp, err
 }
 
 func parseTime(s string) time.Time {
@@ -224,6 +245,7 @@ func (c *Client) getToken(ctx context.Context) (string, error) {
 
 	c.token = tr.AccessToken
 	c.tokenExp = time.Now().Add(time.Duration(tr.ExpiresIn) * time.Second)
+	slog.Info("graph: access token acquired", "expires_in", time.Duration(tr.ExpiresIn)*time.Second)
 	return c.token, nil
 }
 

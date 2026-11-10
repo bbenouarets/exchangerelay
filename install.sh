@@ -223,6 +223,10 @@ client_secret = "${CLIENT_SECRET}"
 smtp_addr = "0.0.0.0:25"
 imap_addr = "0.0.0.0:143"
 
+[log]
+# debug | info | warn | error - view with: journalctl -u ${SERVICE_NAME} -f
+level = info
+
 # Wildcard sender: every host may send from every e-mail address.
 # Restrict afterwards with dedicated [host:IP] sections if needed, e.g.:
 #   [host:10.0.0.43]

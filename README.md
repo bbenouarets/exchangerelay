@@ -76,6 +76,9 @@ imap_addr = "0.0.0.0:143"
 imap_tls_addr = "0.0.0.0:993"
 smtp_tls_addr = "0.0.0.0:465"
 
+[log]
+level = info        # debug | info (default) | warn | error
+
 [host:*]
 emails = *
 ```
@@ -94,6 +97,38 @@ systemctl status exchangerelay
 journalctl -u exchangerelay -f
 systemctl restart exchangerelay
 ```
+
+### Logging
+
+The relay logs to stderr, which systemd forwards to the journal. Every line carries its
+syslog priority, so filtering by severity works:
+
+```bash
+journalctl -u exchangerelay -f              # follow everything
+journalctl -u exchangerelay -p warning      # only warnings and errors
+```
+
+At the default level `info` the journal shows
+
+- every client connection (`connection opened` / `connection closed` with remote address,
+  duration and transferred bytes),
+- IMAP logins/logouts and every mailbox access (folder list, mailbox status, fetched,
+  searched, appended, moved messages, read-state changes) with user, folder and counts,
+- SMTP authentication, rejected senders and every relayed message (envelope sender,
+  sending mailbox, recipients, size),
+- failures talking to Microsoft Graph.
+
+```
+INFO  connection opened proto=imap remote=10.0.0.43:56491
+INFO  imap: login remote=10.0.0.43:56491 user=support@example.com tls=false
+INFO  imap: mailbox status remote=10.0.0.43:56491 user=support@example.com folder=INBOX messages=10 unseen=2
+INFO  imap: messages fetched remote=10.0.0.43:56491 user=support@example.com folder=INBOX set=1:3 messages=3 bytes=48211 duration=412ms
+INFO  connection closed proto=imap remote=10.0.0.43:56491 duration=1.2s rx_bytes=127 tx_bytes=51034
+```
+
+Set `level = debug` in the `[log]` section to additionally log every single Graph request
+(method, URL without query, status, duration) and each SMTP protocol step; `warn` reduces
+the output to problems only. Passwords, access tokens and message contents are never logged.
 
 Updating an existing installation (pull + rebuild + restart):
 

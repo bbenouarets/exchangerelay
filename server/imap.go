@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -31,7 +32,17 @@ func NewIMAPBackend(cfg *config.Config, client *graph.Client) *IMAPBackend {
 }
 
 func (b *IMAPBackend) Login(connInfo *imap.ConnInfo, username, password string) (backend.User, error) {
+	log := slog.With("user", username)
+	tls := false
+	if connInfo != nil {
+		if connInfo.RemoteAddr != nil {
+			log = slog.With("remote", connInfo.RemoteAddr.String(), "user", username)
+		}
+		tls = connInfo.TLS != nil
+	}
+
 	if password == "" {
+		log.Warn("imap: login failed", "reason", "empty password")
 		return nil, backend.ErrInvalidCredentials
 	}
 
@@ -39,18 +50,22 @@ func (b *IMAPBackend) Login(connInfo *imap.ConnInfo, username, password string) 
 	defer cancel()
 	exists, err := b.graph.MailboxExists(ctx, username)
 	if err != nil {
+		log.Error("imap: login failed", "reason", "cannot verify mailbox", "err", err)
 		return nil, err
 	}
 	if !exists {
+		log.Warn("imap: login failed", "reason", "mailbox does not exist in tenant")
 		return nil, backend.ErrInvalidCredentials
 	}
 
-	return &IMAPUser{backend: b, username: username}, nil
+	log.Info("imap: login", "tls", tls)
+	return &IMAPUser{backend: b, username: username, log: log}, nil
 }
 
 type IMAPUser struct {
 	backend  *IMAPBackend
 	username string
+	log      *slog.Logger
 }
 
 func (u *IMAPUser) Username() string { return u.username }
@@ -58,7 +73,11 @@ func (u *IMAPUser) Username() string { return u.username }
 func (u *IMAPUser) folders() ([]graph.Folder, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
-	return u.backend.graph.ListFolders(ctx, u.username)
+	folders, err := u.backend.graph.ListFolders(ctx, u.username)
+	if err != nil {
+		u.log.Error("imap: listing folders failed", "err", err)
+	}
+	return folders, err
 }
 
 func (u *IMAPUser) ListMailboxes(subscribed bool) ([]backend.Mailbox, error) {
@@ -66,6 +85,7 @@ func (u *IMAPUser) ListMailboxes(subscribed bool) ([]backend.Mailbox, error) {
 	if err != nil {
 		return nil, err
 	}
+	u.log.Info("imap: folders listed", "folders", len(folders))
 
 	var out []backend.Mailbox
 	for _, f := range folders {
@@ -106,6 +126,7 @@ func (u *IMAPUser) GetMailbox(name string) (backend.Mailbox, error) {
 			return &IMAPMailbox{user: u, folder: wellKnownFor(f), label: f.DisplayName}, nil
 		}
 	}
+	u.log.Debug("imap: no such mailbox", "folder", name)
 	return nil, backend.ErrNoSuchMailbox
 }
 
@@ -122,6 +143,7 @@ func (u *IMAPUser) RenameMailbox(oldName, newName string) error {
 }
 
 func (u *IMAPUser) Logout() error {
+	u.log.Info("imap: logout")
 	return nil
 }
 
@@ -146,16 +168,32 @@ func (m *IMAPMailbox) Info() (*imap.MailboxInfo, error) {
 	}, nil
 }
 
+// log returns the session logger tagged with this mailbox's folder name.
+func (m *IMAPMailbox) log() *slog.Logger {
+	return m.user.log.With("folder", m.label)
+}
+
 func (m *IMAPMailbox) list() ([]graph.Mail, error) {
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
-	return m.user.backend.graph.ListFolderMessages(ctx, m.user.username, m.folder, imapMaxMessages)
+	mails, err := m.user.backend.graph.ListFolderMessages(ctx, m.user.username, m.folder, imapMaxMessages)
+	if err != nil {
+		m.log().Error("imap: listing messages failed", "duration", time.Since(start), "err", err)
+		return nil, err
+	}
+	m.log().Debug("imap: messages listed", "messages", len(mails), "duration", time.Since(start))
+	return mails, nil
 }
 
 func (m *IMAPMailbox) raw(mailID string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
-	return m.user.backend.graph.GetMessageRaw(ctx, m.user.username, mailID)
+	raw, err := m.user.backend.graph.GetMessageRaw(ctx, m.user.username, mailID)
+	if err != nil {
+		m.log().Error("imap: downloading message failed", "message_id", mailID, "err", err)
+	}
+	return raw, err
 }
 
 func (m *IMAPMailbox) Status(items []imap.StatusItem) (*imap.MailboxStatus, error) {
@@ -193,6 +231,7 @@ func (m *IMAPMailbox) Status(items []imap.StatusItem) (*imap.MailboxStatus, erro
 			status.UidValidity = 1
 		}
 	}
+	m.log().Info("imap: mailbox status", "messages", len(mails), "unseen", unseen)
 	return status, nil
 }
 
@@ -295,19 +334,25 @@ func (m *IMAPMailbox) collect(uid bool, seqset *imap.SeqSet) ([]*graphMessage, e
 func (m *IMAPMailbox) ListMessages(uid bool, seqset *imap.SeqSet, items []imap.FetchItem, ch chan<- *imap.Message) error {
 	defer close(ch)
 
+	start := time.Now()
 	messages, err := m.collect(uid, seqset)
 	if err != nil {
 		return err
 	}
 
+	var sent, size int
 	for i := range messages {
 		seqNum := messages[i].uid
 		msg, err := messages[i].fetch(seqNum, items)
 		if err != nil {
+			m.log().Warn("imap: skipping unparsable message", "seq", seqNum, "message_id", messages[i].mail.ID, "err", err)
 			continue
 		}
 		ch <- msg
+		sent++
+		size += len(messages[i].raw)
 	}
+	m.log().Info("imap: messages fetched", "set", seqset.String(), "messages", sent, "bytes", size, "duration", time.Since(start))
 	return nil
 }
 
@@ -317,6 +362,7 @@ func (m *IMAPMailbox) SearchMessages(uid bool, criteria *imap.SearchCriteria) ([
 		return nil, err
 	}
 
+	start := time.Now()
 	var ids []uint32
 	for i, mail := range mails {
 		seqNum := uint32(i + 1)
@@ -338,6 +384,7 @@ func (m *IMAPMailbox) SearchMessages(uid bool, criteria *imap.SearchCriteria) ([
 		}
 		ids = append(ids, seqNum)
 	}
+	m.log().Info("imap: messages searched", "scanned", len(mails), "matches", len(ids), "duration", time.Since(start))
 	return ids, nil
 }
 
@@ -360,12 +407,19 @@ func (m *IMAPMailbox) CreateMessage(flags []string, date time.Time, body imap.Li
 
 	from, to, subject, textBody, contentType, err := parseMessage(raw)
 	if err != nil {
+		m.log().Warn("imap: append rejected", "reason", "cannot parse message", "size", len(raw), "err", err)
 		return errors.New("cannot parse appended message")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
-	return m.user.backend.graph.CreateMessage(ctx, m.user.username, m.folder, to, subject, textBody, contentType, from)
+	err = m.user.backend.graph.CreateMessage(ctx, m.user.username, m.folder, to, subject, textBody, contentType, from)
+	if err != nil {
+		m.log().Error("imap: append failed", "size", len(raw), "err", err)
+		return err
+	}
+	m.log().Info("imap: message appended", "size", len(raw))
+	return nil
 }
 
 func (m *IMAPMailbox) UpdateMessagesFlags(uid bool, seqset *imap.SeqSet, operation imap.FlagsOp, flags []string) error {
@@ -381,18 +435,23 @@ func (m *IMAPMailbox) UpdateMessagesFlags(uid bool, seqset *imap.SeqSet, operati
 		return err
 	}
 
+	seen := operation == imap.AddFlags
+	var updated int
 	for i, mail := range mails {
 		if !seqset.Contains(uint32(i + 1)) {
 			continue
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
-		err := m.user.backend.graph.SetRead(ctx, m.user.username, mail.ID, operation == imap.AddFlags)
+		err := m.user.backend.graph.SetRead(ctx, m.user.username, mail.ID, seen)
 		cancel()
 		if err != nil {
+			m.log().Error("imap: updating read state failed", "message_id", mail.ID, "seen", seen, "err", err)
 			return err
 		}
+		updated++
 	}
+	m.log().Info("imap: read state updated", "set", seqset.String(), "messages", updated, "seen", seen)
 	return nil
 }
 
@@ -443,6 +502,7 @@ func (m *IMAPMailbox) MoveMessages(uid bool, seqset *imap.SeqSet, dest string) e
 	}
 
 	var lastErr error
+	var moved int
 	for i, mail := range mails {
 		if !seqset.Contains(uint32(i + 1)) {
 			continue
@@ -452,9 +512,13 @@ func (m *IMAPMailbox) MoveMessages(uid bool, seqset *imap.SeqSet, dest string) e
 		err := m.user.backend.graph.MoveMessage(ctx, m.user.username, mail.ID, destFolder)
 		cancel()
 		if err != nil {
+			m.log().Error("imap: moving message failed", "dest", dest, "message_id", mail.ID, "err", err)
 			lastErr = err
+			continue
 		}
+		moved++
 	}
+	m.log().Info("imap: messages moved", "set", seqset.String(), "dest", dest, "messages", moved)
 	return lastErr
 }
 
